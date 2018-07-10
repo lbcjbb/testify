@@ -23,6 +23,29 @@ type TestingT interface {
 	FailNow()
 }
 
+// MultipleArguments represents a stack of list of arguments.
+type MultipleArguments struct {
+	index int
+	Args  []Arguments
+}
+
+// NextArgs return the current list of arguments and increment the index.
+func (mArgs *MultipleArguments) NextArgs() Arguments {
+	defer func() {
+		mArgs.index++
+		if mArgs.index >= len(mArgs.Args) {
+			mArgs.index = len(mArgs.Args) - 1
+		}
+	}()
+
+	return mArgs.Args[mArgs.index]
+}
+
+// Add append the given arguments into the list of arguments.
+func (mArgs *MultipleArguments) Add(arguments ...interface{}) {
+	mArgs.Args = append(mArgs.Args, arguments)
+}
+
 /*
 	Call
 */
@@ -40,7 +63,7 @@ type Call struct {
 
 	// Holds the arguments that should be returned when
 	// this method is called.
-	ReturnArguments Arguments
+	ReturnArguments MultipleArguments
 
 	// Holds the caller info for the On() call
 	callerInfo []string
@@ -69,14 +92,17 @@ type Call struct {
 
 func newCall(parent *Mock, methodName string, callerInfo []string, methodArguments ...interface{}) *Call {
 	return &Call{
-		Parent:          parent,
-		Method:          methodName,
-		Arguments:       methodArguments,
-		ReturnArguments: make([]interface{}, 0),
-		callerInfo:      callerInfo,
-		Repeatability:   0,
-		WaitFor:         nil,
-		RunFn:           nil,
+		Parent:    parent,
+		Method:    methodName,
+		Arguments: methodArguments,
+		ReturnArguments: MultipleArguments{
+			index: 0,
+			Args:  []Arguments{},
+		},
+		callerInfo:    callerInfo,
+		Repeatability: 0,
+		WaitFor:       nil,
+		RunFn:         nil,
 	}
 }
 
@@ -95,7 +121,7 @@ func (c *Call) Return(returnArguments ...interface{}) *Call {
 	c.lock()
 	defer c.unlock()
 
-	c.ReturnArguments = returnArguments
+	c.ReturnArguments.Add(returnArguments...)
 
 	return c
 }
@@ -330,7 +356,25 @@ func (m *Mock) Called(arguments ...interface{}) Arguments {
 	}
 	parts := strings.Split(functionPath, ".")
 	functionName := parts[len(parts)-1]
-	return m.MethodCalled(functionName, arguments...)
+	args := m.MethodCalled(functionName, arguments...)
+
+	if len(args) != 1 {
+		panic(fmt.Sprintf(
+			"Incorrect number of arguments, expected 1, got %d",
+			len(args),
+		))
+	}
+
+	firstArg := args.Get(0)
+	multipleArgs, ok := firstArg.(*MultipleArguments)
+	if !ok {
+		panic(fmt.Sprintf(
+			"Incorrect argument, must be of type %T, got %T",
+			&MultipleArguments{}, firstArg,
+		))
+	}
+
+	return multipleArgs.NextArgs()
 }
 
 // MethodCalled tells the mock object that the given method has been called, and gets
@@ -392,7 +436,7 @@ func (m *Mock) MethodCalled(methodName string, arguments ...interface{}) Argumen
 	}
 
 	m.mutex.Lock()
-	returnArgs := call.ReturnArguments
+	returnArgs := Arguments{&call.ReturnArguments}
 	m.mutex.Unlock()
 
 	return returnArgs
